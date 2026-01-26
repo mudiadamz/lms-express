@@ -225,7 +225,7 @@ async function ensureSeed() {
     { name: '12A', grade: 12, schoolLevel: 'sma' },
   ];
 
-  let createdCount = 0;
+  let classesCreatedCount = 0;
   for (const classData of masterClasses) {
     const existing = db.prepare('SELECT id FROM classes WHERE name = ? AND school_level = ?').get(classData.name, classData.schoolLevel) as any;
     if (!existing) {
@@ -235,10 +235,10 @@ async function ensureSeed() {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(classId, classData.name, classData.grade, classData.schoolLevel, null, academicYearId, 1);
       console.log(`✅ Class created: ${classData.name} (${classData.schoolLevel.toUpperCase()})`);
-      createdCount++;
+      classesCreatedCount++;
     }
   }
-  console.log(`✅ Master classes seeding completed (${createdCount} new classes created)`);
+  console.log(`✅ Master classes seeding completed (${classesCreatedCount} new classes created)`);
 
   // Seed Settings with default payment methods
   console.log('\n⚙️  Seeding settings...');
