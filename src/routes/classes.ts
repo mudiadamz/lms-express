@@ -54,6 +54,12 @@ router.get('/', authenticateToken, (req, res) => {
         JOIN users u ON cs.student_id = u.id
         WHERE cs.class_id = ?
       `).all(cls.id) as any[];
+      const studentCount = db.prepare(`
+        SELECT COUNT(DISTINCT u.id) as count
+        FROM users u
+        LEFT JOIN class_students cs ON cs.student_id = u.id
+        WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
+      `).get(cls.id, cls.id) as any;
 
       const subjects = db.prepare(`
         SELECT s.id, s.name, s.code
@@ -70,6 +76,7 @@ router.get('/', authenticateToken, (req, res) => {
         homeroomTeacherId: cls.homeroom_teacher_id,
         homeroomTeacherName: cls.homeroom_teacher_name,
         studentIds: students.map(s => s.id),
+        studentCount: studentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
         academicYear: cls.academic_year,
         semester: cls.semester,
@@ -115,6 +122,13 @@ router.get('/:id', authenticateToken, (req, res) => {
       WHERE cs.class_id = ?
     `).all(id) as any[];
 
+    const studentCount = db.prepare(`
+      SELECT COUNT(DISTINCT u.id) as count
+      FROM users u
+      LEFT JOIN class_students cs ON cs.student_id = u.id
+      WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
+    `).get(id, id) as any;
+
     res.json({
       success: true,
       data: {
@@ -125,6 +139,7 @@ router.get('/:id', authenticateToken, (req, res) => {
         homeroomTeacherId: cls.homeroom_teacher_id,
         homeroomTeacherName: cls.homeroom_teacher_name,
         studentIds: students.map(s => s.id),
+        studentCount: studentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
         academicYear: cls.academic_year,
         semester: cls.semester,
@@ -194,6 +209,13 @@ router.post('/', authenticateToken, requireRole('admin'), (req, res) => {
       WHERE cs.class_id = ?
     `).all(id) as any[];
 
+    const studentCount = db.prepare(`
+      SELECT COUNT(DISTINCT u.id) as count
+      FROM users u
+      LEFT JOIN class_students cs ON cs.student_id = u.id
+      WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
+    `).get(id, id) as any;
+
     res.status(201).json({
       success: true,
       data: {
@@ -204,6 +226,7 @@ router.post('/', authenticateToken, requireRole('admin'), (req, res) => {
         homeroomTeacherId: cls.homeroom_teacher_id,
         homeroomTeacherName: cls.homeroom_teacher_name,
         studentIds: students.map(s => s.id),
+        studentCount: studentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
         academicYear: cls.academic_year,
         semester: cls.semester,
@@ -288,6 +311,13 @@ router.put('/:id', authenticateToken, requireRole('admin'), (req, res) => {
       WHERE cs.class_id = ?
     `).all(id) as any[];
 
+    const updatedStudentCount = db.prepare(`
+      SELECT COUNT(DISTINCT u.id) as count
+      FROM users u
+      LEFT JOIN class_students cs ON cs.student_id = u.id
+      WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
+    `).get(id, id) as any;
+
     res.json({
       success: true,
       data: {
@@ -298,6 +328,7 @@ router.put('/:id', authenticateToken, requireRole('admin'), (req, res) => {
         homeroomTeacherId: updatedClass.homeroom_teacher_id,
         homeroomTeacherName: updatedClass.homeroom_teacher_name,
         studentIds: students.map(s => s.id),
+        studentCount: updatedStudentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
         academicYear: updatedClass.academic_year,
         semester: updatedClass.semester,

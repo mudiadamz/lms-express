@@ -34,9 +34,21 @@ router.post('/import-users', authenticateToken, requireRole('admin'), upload.sin
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const { role } = req.body;
+    const { role, academicYearId } = req.body;
     if (!role || !['student', 'teacher', 'admin', 'parent'].includes(role)) {
       return res.status(400).json({ success: false, error: 'Invalid role' });
+    }
+    if (role === 'student' && !academicYearId) {
+      return res.status(400).json({ success: false, error: 'Academic year is required for student import' });
+    }
+
+    let academicYearName = '';
+    if (role === 'student' && academicYearId) {
+      const academicYear = db.prepare('SELECT name FROM academic_years WHERE id = ?').get(academicYearId) as any;
+      if (!academicYear) {
+        return res.status(400).json({ success: false, error: 'Academic year not found' });
+      }
+      academicYearName = academicYear.name;
     }
 
     // Parse Excel file
@@ -82,7 +94,15 @@ router.post('/import-users', authenticateToken, requireRole('admin'), upload.sin
           fullName = String(row['Nama Lengkap'] || row['nama_lengkap'] || row['Nama'] || row['nama'] || '').trim();
           email = String(row['Email'] || row['email'] || '').trim();
           schoolLevel = String(row['Tingkat Sekolah'] || row['tingkat_sekolah'] || row['School Level'] || '').trim().toLowerCase();
-          classId = String(row['Kelas ID'] || row['kelas_id'] || row['Class ID'] || '').trim();
+          classId = String(
+            row['Kelas ID'] ||
+              row['kelas_id'] ||
+              row['Class ID'] ||
+              row['Kelas'] ||
+              row['kelas'] ||
+              row['Class'] ||
+              ''
+          ).trim();
           phoneNumber = String(row['No. HP'] || row['no_hp'] || row['Phone'] || '').trim();
           birthPlace = String(row['Tempat Lahir'] || row['tempat_lahir'] || row['Birth Place'] || '').trim();
           birthDate = String(row['Tanggal Lahir'] || row['tanggal_lahir'] || row['Birth Date'] || '').trim();
@@ -93,7 +113,7 @@ router.post('/import-users', authenticateToken, requireRole('admin'), upload.sin
           password = String(row['Password'] || row['password'] || '').trim();
           fullName = String(row['Nama Lengkap'] || row['nama_lengkap'] || row['Nama'] || row['nama'] || '').trim();
           email = String(row['Email'] || row['email'] || '').trim();
-          schoolLevel = String(row['Tingkat Sekolah'] || row['tingkat_sekolah'] || row['School Level'] || '').trim().toLowerCase();
+          schoolLevel = '';
           phoneNumber = String(row['No. HP'] || row['no_hp'] || row['Phone'] || '').trim();
           birthPlace = String(row['Tempat Lahir'] || row['tempat_lahir'] || row['Birth Place'] || '').trim();
           birthDate = String(row['Tanggal Lahir'] || row['tanggal_lahir'] || row['Birth Date'] || '').trim();
@@ -143,6 +163,33 @@ router.post('/import-users', authenticateToken, requireRole('admin'), upload.sin
         // Validate school level
         if (schoolLevel && !['sd', 'smp', 'sma'].includes(schoolLevel)) {
           schoolLevel = '';
+        }
+
+        if (role === 'student' && classId && academicYearName) {
+          let resolvedClassId = '';
+          const classById = db
+            .prepare('SELECT id FROM classes WHERE id = ? AND academic_year = ?')
+            .get(classId, academicYearName) as any;
+          if (classById) {
+            resolvedClassId = classById.id;
+          } else {
+            const classByName = db
+              .prepare('SELECT id FROM classes WHERE name = ? AND academic_year = ?')
+              .get(classId, academicYearName) as any;
+            if (classByName) {
+              resolvedClassId = classByName.id;
+            }
+          }
+
+          if (!resolvedClassId) {
+            results.failed++;
+            results.errors.push({
+              row: rowNumber,
+              error: `Kelas "${classId}" tidak ditemukan untuk tahun ajaran ${academicYearName}`,
+            });
+            continue;
+          }
+          classId = resolvedClassId;
         }
 
         // Hash password

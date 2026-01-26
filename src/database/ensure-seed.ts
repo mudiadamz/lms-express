@@ -208,18 +208,6 @@ async function ensureSeed() {
   // Seed Master Classes
   console.log('\n📚 Seeding master classes...');
   const masterClasses = [
-    // SD (Sekolah Dasar) - IA sampai 6A
-    { name: 'IA', grade: 1, schoolLevel: 'sd' },
-    { name: 'IIA', grade: 2, schoolLevel: 'sd' },
-    { name: 'IIIA', grade: 3, schoolLevel: 'sd' },
-    { name: 'IVA', grade: 4, schoolLevel: 'sd' },
-    { name: 'VA', grade: 5, schoolLevel: 'sd' },
-    { name: 'VIA', grade: 6, schoolLevel: 'sd' },
-    // SMP (Sekolah Menengah Pertama) - 7A, 8A, 9A
-    { name: '7A', grade: 7, schoolLevel: 'smp' },
-    { name: '8A', grade: 8, schoolLevel: 'smp' },
-    { name: '9A', grade: 9, schoolLevel: 'smp' },
-    // SMA (Sekolah Menengah Atas) - 10A, 11A, 12A
     { name: '10A', grade: 10, schoolLevel: 'sma' },
     { name: '11A', grade: 11, schoolLevel: 'sma' },
     { name: '12A', grade: 12, schoolLevel: 'sma' },

@@ -19,6 +19,7 @@ export function createTables() {
       student_id TEXT,
       avatar TEXT,
       phone_number TEXT,
+      gender TEXT CHECK(gender IN ('male', 'female')),
       birth_place TEXT,
       birth_date TEXT,
       kk_file TEXT,
@@ -31,6 +32,17 @@ export function createTables() {
       FOREIGN KEY (student_id) REFERENCES users(id)
     )
   `);
+
+  // Migration: Add gender column if it doesn't exist
+  try {
+    const columns = db.prepare("PRAGMA table_info(users)").all() as any[];
+    const hasGender = columns.some((col: any) => col.name === 'gender');
+    if (!hasGender) {
+      db.exec(`ALTER TABLE users ADD COLUMN gender TEXT CHECK(gender IN ('male', 'female'))`);
+    }
+  } catch (migrationError: any) {
+    console.error('Migration error (gender):', migrationError?.message);
+  }
 
   // Classes table
   db.exec(`

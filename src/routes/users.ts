@@ -20,7 +20,7 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
     // Admins can see everyone
     let query = `
       SELECT id, student_number, teacher_number, admin_number, username, full_name, email, role,
-             school_level, class_id, student_id, avatar, phone_number, birth_place, birth_date,
+             school_level, class_id, student_id, avatar, phone_number, gender, birth_place, birth_date,
              kk_file, ktp_file, photo_file, address, created_at, updated_at
       FROM users
       WHERE 1=1
@@ -46,6 +46,7 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
 
     const formattedUsers = users.map(user => ({
       id: user.id,
+      username: user.username,
       studentNumber: user.student_number,
       teacherNumber: user.teacher_number,
       adminNumber: user.admin_number,
@@ -57,6 +58,7 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
       studentId: user.student_id,
       avatar: user.avatar,
       phoneNumber: user.phone_number,
+      gender: user.gender,
       birthPlace: user.birth_place,
       birthDate: user.birth_date,
       kkFile: user.kk_file,
@@ -86,7 +88,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
 
     const user = db.prepare(`
       SELECT id, student_number, teacher_number, admin_number, username, full_name, email, role,
-             school_level, class_id, student_id, avatar, phone_number, birth_place, birth_date,
+             school_level, class_id, student_id, avatar, phone_number, gender, birth_place, birth_date,
              kk_file, ktp_file, photo_file, address, created_at, updated_at
       FROM users
       WHERE id = ?
@@ -106,6 +108,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
       success: true,
       data: {
         id: user.id,
+        username: user.username,
         studentNumber: user.student_number,
         teacherNumber: user.teacher_number,
         adminNumber: user.admin_number,
@@ -118,6 +121,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
         studentIds: user.role === 'parent' ? studentIds : undefined,
         avatar: user.avatar,
         phoneNumber: user.phone_number,
+        gender: user.gender,
         birthPlace: user.birth_place,
         birthDate: user.birth_date,
         kkFile: user.kk_file,
@@ -149,6 +153,7 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
       schoolLevel,
       classId,
       studentId,
+      gender,
     } = req.body;
 
     if (!username || !password || !fullName || !role) {
@@ -166,9 +171,9 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
 
     db.prepare(`
       INSERT INTO users (id, student_number, teacher_number, admin_number, username, password,
-                         full_name, email, role, school_level, class_id, student_id,
+                         full_name, email, role, school_level, class_id, student_id, gender,
                          created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `).run(
       id,
       studentNumber || null,
@@ -181,12 +186,13 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
       role,
       schoolLevel || null,
       classId || null,
-      studentId || null
+      studentId || null,
+      gender || null
     );
 
     const user = db.prepare(`
       SELECT id, student_number, teacher_number, admin_number, username, full_name, email, role,
-             school_level, class_id, student_id, avatar, phone_number, birth_place, birth_date,
+             school_level, class_id, student_id, avatar, phone_number, gender, birth_place, birth_date,
              kk_file, ktp_file, photo_file, address, created_at, updated_at
       FROM users
       WHERE id = ?
@@ -207,6 +213,7 @@ router.post('/', authenticateToken, requireRole('admin'), async (req, res) => {
         studentId: user.student_id,
         avatar: user.avatar,
         phoneNumber: user.phone_number,
+        gender: user.gender,
         birthPlace: user.birth_place,
         birthDate: user.birth_date,
         kkFile: user.kk_file,
@@ -247,6 +254,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
       studentId,
       avatar,
       phoneNumber,
+      gender,
       birthPlace,
       birthDate,
       kkFile,
@@ -290,6 +298,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
     if (studentId !== undefined) { updates.push('student_id = ?'); values.push(studentId); }
     if (avatar !== undefined) { updates.push('avatar = ?'); values.push(avatar); }
     if (phoneNumber !== undefined) { updates.push('phone_number = ?'); values.push(phoneNumber); }
+    if (gender !== undefined) { updates.push('gender = ?'); values.push(gender); }
     if (birthPlace !== undefined) { updates.push('birth_place = ?'); values.push(birthPlace); }
     if (birthDate !== undefined) { updates.push('birth_date = ?'); values.push(birthDate); }
     if (kkFile !== undefined) { updates.push('kk_file = ?'); values.push(kkFile); }
@@ -301,6 +310,16 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
     values.push(id);
 
     db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+
+    if (classId !== undefined) {
+      db.prepare('DELETE FROM class_students WHERE student_id = ?').run(id);
+      if (classId) {
+        db.prepare(`
+          INSERT OR IGNORE INTO class_students (class_id, student_id)
+          VALUES (?, ?)
+        `).run(classId, id);
+      }
+    }
 
     const user = db.prepare(`
       SELECT id, student_number, teacher_number, admin_number, username, full_name, email, role,
