@@ -1,9 +1,74 @@
 import express from 'express';
+import multer from 'multer';
 import db from '../database/db.js';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
 import { authenticateToken, AuthRequest } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// Configure multer for file uploads
+const uploadDir = path.join(process.cwd(), 'uploads', 'assignments');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `assignment-${uniqueSuffix}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+    
+    if (allowedTypes.some(type => file.mimetype.startsWith(type) || file.mimetype === type)) {
+      cb(null, true);
+    } else {
+      cb(new Error('File type not allowed'));
+    }
+  },
+});
+
+// Upload file endpoint
+router.post('/upload', authenticateToken, upload.single('file'), (req: AuthRequest, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    // Return file URL (relative path that can be served)
+    const fileUrl = `/uploads/assignments/${req.file.filename}`;
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        url: fileUrl,
+        name: req.file.originalname,
+        size: req.file.size,
+      },
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ success: false, error: 'File upload failed' });
+  }
+});
 
 // Get assignments
 router.get('/', authenticateToken, (req: AuthRequest, res) => {

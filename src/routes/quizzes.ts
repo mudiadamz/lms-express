@@ -134,17 +134,23 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
 router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    console.log('Getting quiz by ID:', id, 'for user:', req.userId, 'role:', req.userRole);
 
     const quiz = db.prepare(`
-      SELECT id, title, description, subject_id, class_id, teacher_id,
-             time_limit, start_date, end_date, max_score, created_at
-      FROM quizzes
-      WHERE id = ?
+      SELECT q.id, q.title, q.description, q.subject_id, q.class_id, q.teacher_id,
+             q.time_limit, q.start_date, q.end_date, q.max_score, q.created_at,
+             u.full_name as teacher_name
+      FROM quizzes q
+      LEFT JOIN users u ON q.teacher_id = u.id
+      WHERE q.id = ?
     `).get(id) as any;
 
     if (!quiz) {
+      console.log('Quiz not found:', id);
       return res.status(404).json({ success: false, error: 'Quiz not found' });
     }
+
+    console.log('Quiz found:', quiz.title);
 
     const questions = db.prepare(`
       SELECT id, question, question_image, type, options, correct_answer, points, question_order
@@ -152,6 +158,25 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
       WHERE quiz_id = ?
       ORDER BY question_order
     `).all(id) as any[];
+
+    // For students, check if they have submitted
+    let submission = null;
+    if (req.userRole === 'student') {
+      try {
+        submission = db.prepare(`
+          SELECT id, score, submitted_at, graded_at
+          FROM quiz_submissions
+          WHERE quiz_id = ? AND student_id = ?
+        `).get(id, req.userId) as any;
+        console.log('Student submission check:', submission ? 'Found' : 'Not found');
+        if (submission) {
+          console.log('Submission details:', { score: submission.score, submitted_at: submission.submitted_at });
+        }
+      } catch (submissionError) {
+        console.error('Error checking submission:', submissionError);
+        submission = null;
+      }
+    }
 
     res.json({
       success: true,
@@ -176,6 +201,10 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
         startDate: new Date(quiz.start_date),
         endDate: new Date(quiz.end_date),
         maxScore: quiz.max_score,
+        status: submission ? 'submitted' : 'not_submitted',
+        score: submission?.score !== null && submission?.score !== undefined ? submission.score : null,
+        submittedAt: submission?.submitted_at ? new Date(submission.submitted_at) : null,
+        gradedAt: submission?.graded_at ? new Date(submission.graded_at) : null,
         createdAt: new Date(quiz.created_at),
       },
     });
@@ -190,8 +219,24 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
   try {
     const { title, description, subjectId, classId, questions, timeLimit, startDate, endDate, maxScore } = req.body;
 
-    if (!title || !description || !subjectId || !classId || !questions || !startDate || !endDate || !maxScore) {
-      return res.status(400).json({ success: false, error: 'Required fields missing' });
+    // Detailed validation
+    const missingFields: string[] = [];
+    if (!title) missingFields.push('title');
+    if (!description) missingFields.push('description');
+    if (!subjectId) missingFields.push('subjectId');
+    if (!classId) missingFields.push('classId');
+    if (!questions || !Array.isArray(questions) || questions.length === 0) {
+      missingFields.push('questions (minimal 1 pertanyaan)');
+    }
+    if (!startDate) missingFields.push('startDate');
+    if (!endDate) missingFields.push('endDate');
+    if (!maxScore) missingFields.push('maxScore');
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `Field yang wajib diisi: ${missingFields.join(', ')}` 
+      });
     }
 
     const id = crypto.randomUUID();
@@ -386,6 +431,51 @@ router.post('/:id/submit', authenticateToken, (req: AuthRequest, res) => {
     });
   } catch (error) {
     console.error('Submit quiz error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get quiz submissions
+router.get('/:id/submissions', authenticateToken, (req: AuthRequest, res) => {
+  try {
+    const { id: quizId } = req.params;
+
+    // Check if quiz exists
+    const quiz = db.prepare('SELECT id, teacher_id, class_id FROM quizzes WHERE id = ?').get(quizId) as any;
+    if (!quiz) {
+      return res.status(404).json({ success: false, error: 'Quiz not found' });
+    }
+
+    // Get all submissions for this quiz
+    const submissions = db.prepare(`
+      SELECT id, quiz_id, student_id, score, submitted_at, graded_at
+      FROM quiz_submissions
+      WHERE quiz_id = ?
+    `).all(quizId) as any[];
+
+    // For each submission, get the answers
+    const submissionsWithAnswers = submissions.map(submission => {
+      const answers = db.prepare(`
+        SELECT question_id, answer FROM quiz_answers WHERE submission_id = ?
+      `).all(submission.id) as any[];
+
+      return {
+        id: submission.id,
+        quizId: submission.quiz_id,
+        studentId: submission.student_id,
+        answers: answers.map(a => ({
+          questionId: a.question_id,
+          answer: a.answer,
+        })),
+        score: submission.score,
+        submittedAt: new Date(submission.submitted_at),
+        gradedAt: submission.graded_at ? new Date(submission.graded_at) : null,
+      };
+    });
+
+    res.json({ success: true, data: submissionsWithAnswers });
+  } catch (error) {
+    console.error('Get quiz submissions error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });

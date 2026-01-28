@@ -29,11 +29,15 @@ router.get('/posts', authenticateToken, (req: AuthRequest, res) => {
       ORDER BY is_pinned DESC, created_at DESC
     `).all(classId) as any[];
 
-    // Get attachments for each post
+    // Get attachments and comment count for each post
     const postsWithAttachments = posts.map(post => {
       const attachments = db.prepare(`
         SELECT id, file_url, file_name FROM forum_post_attachments WHERE post_id = ?
       `).all(post.id) as any[];
+
+      const commentCount = db.prepare(`
+        SELECT COUNT(*) as count FROM forum_comments WHERE post_id = ?
+      `).get(post.id) as any;
 
       return {
         id: post.id,
@@ -44,6 +48,7 @@ router.get('/posts', authenticateToken, (req: AuthRequest, res) => {
         title: post.title,
         content: post.content,
         isPinned: post.is_pinned === 1,
+        commentCount: commentCount?.count || 0,
         attachments: attachments.map(a => ({ id: a.id, fileUrl: a.file_url, fileName: a.file_name })),
         createdAt: new Date(post.created_at),
         updatedAt: new Date(post.updated_at),
@@ -69,13 +74,16 @@ router.get('/posts/:id', authenticateToken, (req: AuthRequest, res) => {
     `).get(id) as any;
 
     if (!post) {
+      console.log('Forum post not found:', id);
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
 
     // Check permissions
     if (req.userRole === 'student') {
       const student = db.prepare('SELECT class_id FROM users WHERE id = ?').get(req.userId) as any;
+      console.log('Forum detail - Student ID:', req.userId, '| Student classId:', student?.class_id, '| Post classId:', post.class_id);
       if (student?.class_id !== post.class_id) {
+        console.log('Access denied - classId mismatch');
         return res.status(403).json({ success: false, error: 'Insufficient permissions' });
       }
     }
@@ -85,7 +93,7 @@ router.get('/posts/:id', authenticateToken, (req: AuthRequest, res) => {
     `).all(id) as any[];
 
     const comments = db.prepare(`
-      SELECT id, author_id, author_name, author_role, content, created_at, updated_at
+      SELECT id, author_id, author_name, author_role, content, parent_comment_id, created_at, updated_at
       FROM forum_comments
       WHERE post_id = ?
       ORDER BY created_at ASC
@@ -109,6 +117,7 @@ router.get('/posts/:id', authenticateToken, (req: AuthRequest, res) => {
           authorName: c.author_name,
           authorRole: c.author_role,
           content: c.content,
+          parentCommentId: c.parent_comment_id,
           createdAt: new Date(c.created_at),
           updatedAt: new Date(c.updated_at),
         })),
@@ -283,7 +292,7 @@ router.delete('/posts/:id', authenticateToken, (req: AuthRequest, res) => {
 router.post('/posts/:id/comments', authenticateToken, (req: AuthRequest, res) => {
   try {
     const { id: postId } = req.params;
-    const { content } = req.body;
+    const { content, parentCommentId } = req.body;
 
     if (!content) {
       return res.status(400).json({ success: false, error: 'Content required' });
@@ -310,12 +319,12 @@ router.post('/posts/:id/comments', authenticateToken, (req: AuthRequest, res) =>
     const commentId = crypto.randomUUID();
 
     db.prepare(`
-      INSERT INTO forum_comments (id, post_id, author_id, author_name, author_role, content)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(commentId, postId, req.userId, author.full_name, author.role, content);
+      INSERT INTO forum_comments (id, post_id, author_id, author_name, author_role, content, parent_comment_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(commentId, postId, req.userId, author.full_name, author.role, content, parentCommentId || null);
 
     const comment = db.prepare(`
-      SELECT id, author_id, author_name, author_role, content, created_at, updated_at
+      SELECT id, author_id, author_name, author_role, content, parent_comment_id, created_at, updated_at
       FROM forum_comments WHERE id = ?
     `).get(commentId) as any;
 
@@ -327,6 +336,7 @@ router.post('/posts/:id/comments', authenticateToken, (req: AuthRequest, res) =>
         authorName: comment.author_name,
         authorRole: comment.author_role,
         content: comment.content,
+        parentCommentId: comment.parent_comment_id,
         createdAt: new Date(comment.created_at),
         updatedAt: new Date(comment.updated_at),
       },

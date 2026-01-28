@@ -21,33 +21,34 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
 
     const params: any[] = [];
 
-    // Filter by target audience
-    if (targetAudience) {
-      query += ' AND (a.target_audience = ? OR a.target_audience = \'all\')';
-      params.push(targetAudience);
-    }
-
-    if (classId) {
-      query += ' AND (a.class_id = ? OR a.class_id IS NULL)';
-      params.push(classId);
-    }
-
-    if (isPinned !== undefined) {
-      query += ' AND a.is_pinned = ?';
-      params.push(isPinned === 'true' || isPinned === '1' ? 1 : 0);
-    }
-
     // Students can only see announcements for their class or all
     if (req.userRole === 'student') {
       const student = db.prepare('SELECT class_id FROM users WHERE id = ?').get(req.userId) as any;
+      console.log('Student filter - userId:', req.userId, 'classId:', student?.class_id);
       if (student?.class_id) {
         query += ' AND (a.class_id = ? OR a.class_id IS NULL)';
         params.push(student.class_id);
       } else {
         query += ' AND a.class_id IS NULL';
       }
-      query += ' AND (a.target_audience = ? OR a.target_audience = \'all\')';
+      query += ' AND (a.target_audience IN (?, \'all\'))';
       params.push(req.userRole);
+    } else {
+      // For non-students, allow filtering by target audience and classId
+      if (targetAudience) {
+        query += ' AND (a.target_audience = ? OR a.target_audience = \'all\')';
+        params.push(targetAudience);
+      }
+
+      if (classId) {
+        query += ' AND (a.class_id = ? OR a.class_id IS NULL)';
+        params.push(classId);
+      }
+    }
+
+    if (isPinned !== undefined) {
+      query += ' AND a.is_pinned = ?';
+      params.push(isPinned === 'true' || isPinned === '1' ? 1 : 0);
     }
 
     // Parents can see announcements for their child's class
@@ -73,7 +74,19 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
 
     query += ' ORDER BY a.is_pinned DESC, a.created_at DESC';
 
+    if (req.userRole === 'student') {
+      console.log('Final query for student:', query);
+      console.log('Params:', params);
+    }
+
     const announcements = db.prepare(query).all(...params) as any[];
+
+    if (req.userRole === 'student') {
+      console.log('Announcements found for student:', announcements.length);
+      announcements.forEach(a => {
+        console.log('  -', a.title, '| classId:', a.class_id, '| targetAudience:', a.target_audience);
+      });
+    }
 
     // Get attachments for each announcement
     const announcementsWithAttachments = announcements.map(announcement => {
@@ -169,16 +182,8 @@ router.post('/', authenticateToken, requireRole('admin', 'teacher'), (req: AuthR
       return res.status(400).json({ success: false, error: 'Required fields missing' });
     }
 
-    // Teachers can only create announcements for their classes
-    if (req.userRole === 'teacher' && classId) {
-      const teacherClasses = db.prepare(`
-        SELECT id FROM classes WHERE homeroom_teacher_id = ?
-      `).all(req.userId) as any[];
-      const classIds = teacherClasses.map(c => c.id);
-      if (!classIds.includes(classId)) {
-        return res.status(403).json({ success: false, error: 'Insufficient permissions' });
-      }
-    }
+    // Teachers can create announcements for any class
+    // No additional permission check needed - requireRole middleware already ensures user is teacher or admin
 
     const id = crypto.randomUUID();
 

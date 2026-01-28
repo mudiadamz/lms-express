@@ -264,6 +264,18 @@ export function createTables() {
     )
   `);
 
+  // Migration: Add feedback to quiz_submissions
+  try {
+    const columns = db.prepare("PRAGMA table_info(quiz_submissions)").all() as any[];
+    const hasFeedback = columns.some((col: any) => col.name === 'feedback');
+    if (!hasFeedback) {
+      db.exec(`ALTER TABLE quiz_submissions ADD COLUMN feedback TEXT`);
+      console.log('✅ Added feedback column to quiz_submissions table');
+    }
+  } catch (migrationError: any) {
+    console.error('Migration error (quiz_submissions feedback):', migrationError?.message);
+  }
+
   // Quiz Answers table
   db.exec(`
     CREATE TABLE IF NOT EXISTS quiz_answers (
@@ -428,6 +440,18 @@ export function createTables() {
       FOREIGN KEY (author_id) REFERENCES users(id)
     )
   `);
+
+  // Migration: Add parent_comment_id to forum_comments for reply feature
+  try {
+    const columns = db.prepare("PRAGMA table_info(forum_comments)").all() as any[];
+    const hasParentCommentId = columns.some((col: any) => col.name === 'parent_comment_id');
+    if (!hasParentCommentId) {
+      db.exec(`ALTER TABLE forum_comments ADD COLUMN parent_comment_id TEXT REFERENCES forum_comments(id) ON DELETE CASCADE`);
+      console.log('✅ Added parent_comment_id to forum_comments table');
+    }
+  } catch (migrationError: any) {
+    console.error('Migration error (parent_comment_id):', migrationError?.message);
+  }
 
   // Messages table
   db.exec(`
