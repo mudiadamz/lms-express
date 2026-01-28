@@ -83,7 +83,7 @@ router.post('/', authenticateToken, requireRole('admin'), (req: AuthRequest, res
   try {
     const { name, description, schoolLevel, startDate, endDate } = req.body;
 
-    if (!name || !description || !schoolLevel || !startDate) {
+    if (!name || !description || !schoolLevel) {
       return res.status(400).json({ success: false, error: 'Required fields missing' });
     }
 
@@ -97,7 +97,7 @@ router.post('/', authenticateToken, requireRole('admin'), (req: AuthRequest, res
       name,
       description,
       schoolLevel,
-      startDate,
+      startDate || null,
       endDate || null
     );
 

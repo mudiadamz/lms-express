@@ -23,6 +23,7 @@ import curriculumRoutes from './routes/curriculums.js';
 import auditLogRoutes from './routes/audit-logs.js';
 import excelRoutes from './routes/excel.js';
 import settingsRoutes from './routes/settings.js';
+import badgesRoutes from './routes/badges.js';
 
 dotenv.config();
 
@@ -113,6 +114,7 @@ app.use('/api/curriculums', curriculumRoutes);
 app.use('/api/audit-logs', auditLogRoutes);
 app.use('/api/excel', excelRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/badges', badgesRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {

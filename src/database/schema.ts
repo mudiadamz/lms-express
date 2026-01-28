@@ -484,7 +484,7 @@ export function createTables() {
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('assignment', 'quiz', 'grade', 'announcement', 'message', 'attendance', 'other')),
+      type TEXT NOT NULL CHECK(type IN ('assignment', 'quiz', 'grade', 'announcement', 'message', 'attendance', 'payment', 'other')),
       title TEXT NOT NULL,
       message TEXT NOT NULL,
       link TEXT,
@@ -733,11 +733,44 @@ export function createTables() {
       description TEXT NOT NULL,
       school_level TEXT NOT NULL CHECK(school_level IN ('sd', 'smp', 'sma', 'all')),
       is_active INTEGER DEFAULT 0,
-      start_date DATE NOT NULL,
+      start_date DATE,
       end_date DATE,
+      document_url TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Migration: Recreate curriculums table to make dates optional and add document_url
+  try {
+    const columns = db.prepare("PRAGMA table_info(curriculums)").all() as any[];
+    const startDateCol = columns.find((col: any) => col.name === 'start_date');
+    const hasDocumentUrl = columns.some((col: any) => col.name === 'document_url');
+    
+    if (startDateCol?.notnull === 1 || !hasDocumentUrl) {
+      console.log('🔄 Migrating curriculums table...');
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec(`
+        CREATE TABLE curriculums_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          school_level TEXT NOT NULL CHECK(school_level IN ('sd', 'smp', 'sma', 'all')),
+          is_active INTEGER DEFAULT 0,
+          start_date DATE,
+          end_date DATE,
+          document_url TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      db.exec(`INSERT INTO curriculums_new SELECT id, name, description, school_level, is_active, start_date, end_date, NULL, created_at FROM curriculums`);
+      db.exec(`DROP TABLE curriculums`);
+      db.exec(`ALTER TABLE curriculums_new RENAME TO curriculums`);
+      db.exec('PRAGMA foreign_keys = ON');
+      console.log('✅ Migration completed: curriculums table updated');
+    }
+  } catch (migrationError: any) {
+    console.error('❌ Migration error:', migrationError?.message);
+  }
 
   // Audit Logs table
   db.exec(`
