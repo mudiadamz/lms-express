@@ -78,7 +78,7 @@ export function createTables() {
       code TEXT UNIQUE NOT NULL,
       description TEXT,
       school_level TEXT NOT NULL CHECK(school_level IN ('sd', 'smp', 'sma')),
-      teacher_id TEXT NOT NULL,
+      teacher_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (teacher_id) REFERENCES users(id)
     )
@@ -95,6 +95,38 @@ export function createTables() {
     )
   `);
 
+  // Migration: allow subjects.teacher_id to be nullable
+  try {
+    const subjectColumns = db.prepare("PRAGMA table_info(subjects)").all() as any[];
+    const teacherIdColumn = subjectColumns.find((col: any) => col.name === 'teacher_id');
+    if (teacherIdColumn && teacherIdColumn.notnull === 1) {
+      console.log('🔄 Migrating subjects table: allow teacher_id NULL...');
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec(`
+        CREATE TABLE subjects_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          code TEXT UNIQUE NOT NULL,
+          description TEXT,
+          school_level TEXT NOT NULL CHECK(school_level IN ('sd', 'smp', 'sma')),
+          teacher_id TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (teacher_id) REFERENCES users(id)
+        )
+      `);
+      db.exec(`
+        INSERT INTO subjects_new (id, name, code, description, school_level, teacher_id, created_at)
+        SELECT id, name, code, description, school_level, teacher_id, created_at FROM subjects
+      `);
+      db.exec(`DROP TABLE subjects`);
+      db.exec(`ALTER TABLE subjects_new RENAME TO subjects`);
+      db.exec('PRAGMA foreign_keys = ON');
+      console.log('✅ Migration completed: subjects.teacher_id is now nullable');
+    }
+  } catch (migrationError: any) {
+    console.error('❌ Migration error (subjects.teacher_id nullable):', migrationError?.message);
+  }
+
   // Assignments table
   db.exec(`
     CREATE TABLE IF NOT EXISTS assignments (
@@ -104,6 +136,7 @@ export function createTables() {
       subject_id TEXT NOT NULL,
       class_id TEXT NOT NULL,
       teacher_id TEXT NOT NULL,
+      start_date DATETIME,
       due_date DATETIME NOT NULL,
       max_score REAL NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -113,6 +146,20 @@ export function createTables() {
       FOREIGN KEY (teacher_id) REFERENCES users(id)
     )
   `);
+
+  // Migration: Add start_date column to assignments if it doesn't exist
+  try {
+    const assignmentColumns = db.prepare("PRAGMA table_info(assignments)").all() as any[];
+    const hasStartDate = assignmentColumns.some((col: any) => col.name === 'start_date');
+    if (!hasStartDate) {
+      console.log('🔄 Migrating assignments table: adding start_date column...');
+      db.exec('ALTER TABLE assignments ADD COLUMN start_date DATETIME');
+      db.exec('UPDATE assignments SET start_date = created_at WHERE start_date IS NULL');
+      console.log('✅ Migration completed: assignments.start_date added');
+    }
+  } catch (migrationError: any) {
+    console.error('❌ Migration error (assignments.start_date):', migrationError?.message);
+  }
 
   // Assignment Attachments table
   db.exec(`
@@ -179,6 +226,7 @@ export function createTables() {
       id TEXT PRIMARY KEY,
       quiz_id TEXT NOT NULL,
       question TEXT NOT NULL,
+      question_image TEXT,
       type TEXT NOT NULL CHECK(type IN ('multiple_choice', 'essay', 'true_false', 'short_answer')),
       options TEXT,
       correct_answer TEXT NOT NULL,
@@ -187,6 +235,19 @@ export function createTables() {
       FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
     )
   `);
+
+  // Migration: Add question_image column to quiz_questions if it doesn't exist
+  try {
+    const quizQuestionColumns = db.prepare("PRAGMA table_info(quiz_questions)").all() as any[];
+    const hasQuestionImage = quizQuestionColumns.some((col: any) => col.name === 'question_image');
+    if (!hasQuestionImage) {
+      console.log('🔄 Migrating quiz_questions table: adding question_image column...');
+      db.exec('ALTER TABLE quiz_questions ADD COLUMN question_image TEXT');
+      console.log('✅ Migration completed: quiz_questions.question_image added');
+    }
+  } catch (migrationError: any) {
+    console.error('❌ Migration error (quiz_questions.question_image):', migrationError?.message);
+  }
 
   // Quiz Submissions table
   db.exec(`
@@ -460,7 +521,7 @@ export function createTables() {
       year INTEGER NOT NULL,
       amount REAL NOT NULL,
       due_date DATE NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue')),
+      status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue', 'verifying')),
       payment_method TEXT,
       receipt_number TEXT,
       receipt_file_url TEXT,
@@ -494,7 +555,7 @@ export function createTables() {
             year INTEGER NOT NULL,
             amount REAL NOT NULL,
             due_date DATE NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue')),
+            status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue', 'verifying')),
             payment_method TEXT,
             receipt_number TEXT,
             receipt_file_url TEXT,
@@ -559,7 +620,7 @@ export function createTables() {
             year INTEGER NOT NULL,
             amount REAL NOT NULL,
             due_date DATE NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue')),
+            status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue', 'verifying')),
             payment_method TEXT,
             receipt_number TEXT,
             receipt_file_url TEXT,
@@ -590,6 +651,54 @@ export function createTables() {
     }
   } catch (migrationError: any) {
     console.error('❌ Migration error for receipt_file_url:', migrationError?.message);
+  }
+
+  // Migration: Update CHECK constraint to allow 'verifying' status
+  try {
+    console.log('🔄 Checking if payments table needs status migration...');
+    // SQLite doesn't support ALTER COLUMN, so we need to recreate the table
+    const testInsert = db.prepare(`
+      SELECT id FROM payments WHERE status = 'verifying' LIMIT 1
+    `);
+    
+    try {
+      testInsert.get();
+      console.log('✅ Payments table already supports verifying status');
+    } catch (checkError: any) {
+      if (checkError.message.includes('CHECK constraint')) {
+        console.log('🔄 Migrating payments table to support verifying status...');
+        db.exec('PRAGMA foreign_keys = OFF');
+        db.exec(`
+          CREATE TABLE payments_new (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            class_id TEXT,
+            month TEXT NOT NULL,
+            year INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            due_date DATE NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('paid', 'pending', 'overdue', 'verifying')),
+            payment_method TEXT,
+            receipt_number TEXT,
+            receipt_file_url TEXT,
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (student_id) REFERENCES users(id),
+            FOREIGN KEY (class_id) REFERENCES classes(id)
+          )
+        `);
+        db.exec(`
+          INSERT INTO payments_new 
+          SELECT * FROM payments
+        `);
+        db.exec(`DROP TABLE payments`);
+        db.exec(`ALTER TABLE payments_new RENAME TO payments`);
+        db.exec('PRAGMA foreign_keys = ON');
+        console.log('✅ Migration completed: payments table now supports verifying status');
+      }
+    }
+  } catch (migrationError: any) {
+    console.error('❌ Migration error for verifying status:', migrationError?.message);
   }
 
   // Curriculums table

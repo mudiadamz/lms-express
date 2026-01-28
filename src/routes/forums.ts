@@ -303,6 +303,10 @@ router.post('/posts/:id/comments', authenticateToken, (req: AuthRequest, res) =>
     }
 
     const author = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(req.userId) as any;
+    if (!author) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
     const commentId = crypto.randomUUID();
 
     db.prepare(`

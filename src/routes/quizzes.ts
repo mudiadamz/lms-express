@@ -8,7 +8,7 @@ const router = express.Router();
 // Get quizzes
 router.get('/', authenticateToken, (req: AuthRequest, res) => {
   try {
-    const { classId, subjectId } = req.query;
+    const { classId, subjectId, teacherId } = req.query;
     let query = `
       SELECT q.id, q.title, q.description, q.subject_id, q.class_id, q.teacher_id,
              q.time_limit, q.start_date, q.end_date, q.max_score, q.created_at,
@@ -29,6 +29,11 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
       query += ' AND q.subject_id = ?';
       params.push(subjectId);
     }
+
+    if (teacherId) {
+      query += ' AND q.teacher_id = ?';
+      params.push(teacherId);
+    }
     
     if (req.userRole === 'student') {
       const user = db.prepare('SELECT class_id FROM users WHERE id = ?').get(req.userId) as any;
@@ -44,11 +49,48 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
 
     const formattedQuizzes = quizzes.map(quiz => {
       const questions = db.prepare(`
-        SELECT id, question, type, options, correct_answer, points, question_order
+        SELECT id, question, question_image, type, options, correct_answer, points, question_order
         FROM quiz_questions
         WHERE quiz_id = ?
         ORDER BY question_order
       `).all(quiz.id) as any[];
+
+      // For students, include their submission status
+      let submission = null;
+      if (req.userRole === 'student') {
+        submission = db.prepare(`
+          SELECT id, score, submitted_at, graded_at
+          FROM quiz_submissions
+          WHERE quiz_id = ? AND student_id = ?
+        `).get(quiz.id, req.userId) as any;
+      }
+
+      // For teachers, include submission counts
+      let submissionCount = 0;
+      let ungradedCount = 0;
+      let totalStudents = 0;
+      if (req.userRole === 'teacher') {
+        // Count total submissions
+        const submissionCountResult = db.prepare(`
+          SELECT COUNT(*) as count FROM quiz_submissions WHERE quiz_id = ?
+        `).get(quiz.id) as any;
+        submissionCount = submissionCountResult?.count || 0;
+
+        // Count ungraded submissions (score is null)
+        const ungradedCountResult = db.prepare(`
+          SELECT COUNT(*) as count FROM quiz_submissions WHERE quiz_id = ? AND score IS NULL
+        `).get(quiz.id) as any;
+        ungradedCount = ungradedCountResult?.count || 0;
+
+        // Count total students in class
+        const totalStudentsResult = db.prepare(`
+          SELECT COUNT(DISTINCT u.id) as count
+          FROM users u
+          LEFT JOIN class_students cs ON cs.student_id = u.id
+          WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
+        `).get(quiz.class_id, quiz.class_id) as any;
+        totalStudents = totalStudentsResult?.count || 0;
+      }
 
       return {
         id: quiz.id,
@@ -61,6 +103,7 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
         questions: questions.map(q => ({
           id: q.id,
           question: q.question,
+          questionImage: q.question_image || undefined,
           type: q.type,
           options: q.options ? JSON.parse(q.options) : undefined,
           correctAnswer: q.correct_answer,
@@ -70,6 +113,12 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
         startDate: new Date(quiz.start_date),
         endDate: new Date(quiz.end_date),
         maxScore: quiz.max_score,
+        status: submission ? 'submitted' : 'pending',
+        score: submission?.score || null,
+        submittedAt: submission?.submitted_at ? new Date(submission.submitted_at) : null,
+        submissionCount: submissionCount,
+        ungradedCount: ungradedCount,
+        totalStudents: totalStudents,
         createdAt: new Date(quiz.created_at),
       };
     });
@@ -98,7 +147,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
     }
 
     const questions = db.prepare(`
-      SELECT id, question, type, options, correct_answer, points, question_order
+      SELECT id, question, question_image, type, options, correct_answer, points, question_order
       FROM quiz_questions
       WHERE quiz_id = ?
       ORDER BY question_order
@@ -117,6 +166,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
         questions: questions.map(q => ({
           id: q.id,
           question: q.question,
+          questionImage: q.question_image || undefined,
           type: q.type,
           options: q.options ? JSON.parse(q.options) : undefined,
           correctAnswer: q.correct_answer,
@@ -155,8 +205,8 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
 
     // Insert questions
     const insertQuestion = db.prepare(`
-      INSERT INTO quiz_questions (id, quiz_id, question, type, options, correct_answer, points, question_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO quiz_questions (id, quiz_id, question, question_image, type, options, correct_answer, points, question_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     questions.forEach((q: any, index: number) => {
@@ -165,6 +215,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
         questionId,
         id,
         q.question,
+        q.questionImage || null,
         q.type,
         q.options ? JSON.stringify(q.options) : null,
         typeof q.correctAnswer === 'object' ? JSON.stringify(q.correctAnswer) : q.correctAnswer,
@@ -181,7 +232,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
     `).get(id) as any;
 
     const quizQuestions = db.prepare(`
-      SELECT id, question, type, options, correct_answer, points, question_order
+      SELECT id, question, question_image, type, options, correct_answer, points, question_order
       FROM quiz_questions
       WHERE quiz_id = ?
       ORDER BY question_order
@@ -199,6 +250,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
         questions: quizQuestions.map(q => ({
           id: q.id,
           question: q.question,
+          questionImage: q.question_image || undefined,
           type: q.type,
           options: q.options ? JSON.parse(q.options) : undefined,
           correctAnswer: q.correct_answer,
@@ -233,7 +285,7 @@ router.post('/:id/submit', authenticateToken, (req: AuthRequest, res) => {
       return res.status(404).json({ success: false, error: 'Quiz not found' });
     }
 
-    // Check if already submitted
+    // Check if already submitted - quizzes cannot be resubmitted
     const existingSubmission = db.prepare(`
       SELECT id FROM quiz_submissions WHERE quiz_id = ? AND student_id = ?
     `).get(quizId, req.userId);

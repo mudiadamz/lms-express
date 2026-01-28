@@ -68,6 +68,13 @@ router.get('/', authenticateToken, (req, res) => {
         WHERE cs.class_id = ?
       `).all(cls.id) as any[];
 
+      // Get teachers who teach this class from schedules
+      const teachers = db.prepare(`
+        SELECT DISTINCT teacher_id
+        FROM schedules
+        WHERE class_id = ?
+      `).all(cls.id) as any[];
+
       return {
         id: cls.id,
         name: cls.name,
@@ -78,6 +85,7 @@ router.get('/', authenticateToken, (req, res) => {
         studentIds: students.map(s => s.id),
         studentCount: studentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
+        teacherIds: teachers.map(t => t.teacher_id),
         academicYear: cls.academic_year,
         semester: cls.semester,
       };
@@ -129,6 +137,13 @@ router.get('/:id', authenticateToken, (req, res) => {
       WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
     `).get(id, id) as any;
 
+    // Get teachers who teach this class from schedules
+    const teachers = db.prepare(`
+      SELECT DISTINCT teacher_id
+      FROM schedules
+      WHERE class_id = ?
+    `).all(id) as any[];
+
     res.json({
       success: true,
       data: {
@@ -141,6 +156,7 @@ router.get('/:id', authenticateToken, (req, res) => {
         studentIds: students.map(s => s.id),
         studentCount: studentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
+        teacherIds: teachers.map(t => t.teacher_id),
         academicYear: cls.academic_year,
         semester: cls.semester,
       },
@@ -216,6 +232,13 @@ router.post('/', authenticateToken, requireRole('admin'), (req, res) => {
       WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
     `).get(id, id) as any;
 
+    // Get teachers who teach this class from schedules
+    const teachersForNewClass = db.prepare(`
+      SELECT DISTINCT teacher_id
+      FROM schedules
+      WHERE class_id = ?
+    `).all(id) as any[];
+
     res.status(201).json({
       success: true,
       data: {
@@ -228,6 +251,7 @@ router.post('/', authenticateToken, requireRole('admin'), (req, res) => {
         studentIds: students.map(s => s.id),
         studentCount: studentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
+        teacherIds: teachersForNewClass.map(t => t.teacher_id),
         academicYear: cls.academic_year,
         semester: cls.semester,
       },
@@ -318,6 +342,13 @@ router.put('/:id', authenticateToken, requireRole('admin'), (req, res) => {
       WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
     `).get(id, id) as any;
 
+    // Get teachers who teach this class from schedules
+    const teachersForUpdatedClass = db.prepare(`
+      SELECT DISTINCT teacher_id
+      FROM schedules
+      WHERE class_id = ?
+    `).all(id) as any[];
+
     res.json({
       success: true,
       data: {
@@ -330,6 +361,7 @@ router.put('/:id', authenticateToken, requireRole('admin'), (req, res) => {
         studentIds: students.map(s => s.id),
         studentCount: updatedStudentCount?.count || 0,
         subjectIds: subjects.map(s => s.id),
+        teacherIds: teachersForUpdatedClass.map(t => t.teacher_id),
         academicYear: updatedClass.academic_year,
         semester: updatedClass.semester,
       },

@@ -376,12 +376,17 @@ router.post('/:id/upload-receipt', authenticateToken, upload.single('receipt'), 
     }
 
     // Update payment with receipt file URL and payment method
+    // Change status to 'verifying' when receipt is uploaded
     const receiptFileUrl = `/uploads/payments/${req.file.filename}`;
     const updates: string[] = [];
     const values: any[] = [];
 
     updates.push('receipt_file_url = ?');
     values.push(receiptFileUrl);
+
+    // Update status to indicate waiting for verification
+    updates.push('status = ?');
+    values.push('verifying');
 
     if (paymentMethod) {
       updates.push('payment_method = ?');

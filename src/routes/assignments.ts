@@ -8,10 +8,10 @@ const router = express.Router();
 // Get assignments
 router.get('/', authenticateToken, (req: AuthRequest, res) => {
   try {
-    const { classId, subjectId } = req.query;
+    const { classId, subjectId, teacherId } = req.query;
     let query = `
       SELECT a.id, a.title, a.description, a.subject_id, a.class_id, a.teacher_id,
-             a.due_date, a.max_score, a.created_at, a.updated_at,
+             a.start_date, a.due_date, a.max_score, a.created_at, a.updated_at,
              u.full_name as teacher_name
       FROM assignments a
       LEFT JOIN users u ON a.teacher_id = u.id
@@ -29,6 +29,11 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
       query += ' AND a.subject_id = ?';
       params.push(subjectId);
     }
+
+    if (teacherId) {
+      query += ' AND a.teacher_id = ?';
+      params.push(teacherId);
+    }
     
     // Students can only see assignments for their class
     if (req.userRole === 'student') {
@@ -43,11 +48,48 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
 
     const assignments = db.prepare(query).all(...params) as any[];
 
-    // Get attachments for each assignment
+    // Get attachments and submission status for each assignment
     const formattedAssignments = assignments.map(assignment => {
       const attachments = db.prepare(`
         SELECT file_url, file_name FROM assignment_attachments WHERE assignment_id = ?
       `).all(assignment.id) as any[];
+
+      // For students, include their submission status
+      let submission = null;
+      if (req.userRole === 'student') {
+        submission = db.prepare(`
+          SELECT id, score, feedback, submitted_at, graded_at
+          FROM assignment_submissions
+          WHERE assignment_id = ? AND student_id = ?
+        `).get(assignment.id, req.userId) as any;
+      }
+
+      // For teachers, include submission counts
+      let submissionCount = 0;
+      let ungradedCount = 0;
+      let totalStudents = 0;
+      if (req.userRole === 'teacher') {
+        // Count total submissions
+        const submissionCountResult = db.prepare(`
+          SELECT COUNT(*) as count FROM assignment_submissions WHERE assignment_id = ?
+        `).get(assignment.id) as any;
+        submissionCount = submissionCountResult?.count || 0;
+
+        // Count ungraded submissions (score is null)
+        const ungradedCountResult = db.prepare(`
+          SELECT COUNT(*) as count FROM assignment_submissions WHERE assignment_id = ? AND score IS NULL
+        `).get(assignment.id) as any;
+        ungradedCount = ungradedCountResult?.count || 0;
+
+        // Count total students in class
+        const totalStudentsResult = db.prepare(`
+          SELECT COUNT(DISTINCT u.id) as count
+          FROM users u
+          LEFT JOIN class_students cs ON cs.student_id = u.id
+          WHERE u.role = 'student' AND (u.class_id = ? OR cs.class_id = ?)
+        `).get(assignment.class_id, assignment.class_id) as any;
+        totalStudents = totalStudentsResult?.count || 0;
+      }
 
       return {
         id: assignment.id,
@@ -57,9 +99,17 @@ router.get('/', authenticateToken, (req: AuthRequest, res) => {
         classId: assignment.class_id,
         teacherId: assignment.teacher_id,
         teacherName: assignment.teacher_name,
+        startDate: assignment.start_date ? new Date(assignment.start_date) : new Date(assignment.created_at),
         dueDate: new Date(assignment.due_date),
         maxScore: assignment.max_score,
         attachments: attachments.map(a => a.file_url),
+        status: submission ? 'submitted' : 'pending',
+        score: submission?.score || null,
+        feedback: submission?.feedback || null,
+        submittedAt: submission?.submitted_at ? new Date(submission.submitted_at) : null,
+        submissionCount: submissionCount,
+        ungradedCount: ungradedCount,
+        totalStudents: totalStudents,
         createdAt: new Date(assignment.created_at),
         updatedAt: new Date(assignment.updated_at),
       };
@@ -79,7 +129,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
 
     const assignment = db.prepare(`
       SELECT a.id, a.title, a.description, a.subject_id, a.class_id, a.teacher_id,
-             a.due_date, a.max_score, a.created_at, a.updated_at,
+             a.start_date, a.due_date, a.max_score, a.created_at, a.updated_at,
              u.full_name as teacher_name
       FROM assignments a
       LEFT JOIN users u ON a.teacher_id = u.id
@@ -104,6 +154,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
         classId: assignment.class_id,
         teacherId: assignment.teacher_id,
         teacherName: assignment.teacher_name,
+        startDate: assignment.start_date ? new Date(assignment.start_date) : new Date(assignment.created_at),
         dueDate: new Date(assignment.due_date),
         maxScore: assignment.max_score,
         attachments: attachments.map(a => a.file_url),
@@ -120,9 +171,9 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
 // Create assignment
 router.post('/', authenticateToken, (req: AuthRequest, res) => {
   try {
-    const { title, description, subjectId, classId, dueDate, maxScore, attachments } = req.body;
+    const { title, description, subjectId, classId, startDate, dueDate, maxScore, attachments } = req.body;
 
-    if (!title || !description || !subjectId || !classId || !dueDate || !maxScore) {
+    if (!title || !description || !subjectId || !classId || !startDate || !dueDate || !maxScore) {
       return res.status(400).json({ success: false, error: 'Required fields missing' });
     }
 
@@ -131,9 +182,9 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
 
     db.prepare(`
       INSERT INTO assignments (id, title, description, subject_id, class_id, teacher_id,
-                              due_date, max_score, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `).run(id, title, description, subjectId, classId, teacherId, dueDate, maxScore);
+                              start_date, due_date, max_score, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).run(id, title, description, subjectId, classId, teacherId, startDate, dueDate, maxScore);
 
     // Insert attachments
     if (attachments && Array.isArray(attachments)) {
@@ -150,7 +201,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
 
     const assignment = db.prepare(`
       SELECT id, title, description, subject_id, class_id, teacher_id,
-             due_date, max_score, created_at, updated_at
+             start_date, due_date, max_score, created_at, updated_at
       FROM assignments
       WHERE id = ?
     `).get(id) as any;
@@ -168,6 +219,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
         subjectId: assignment.subject_id,
         classId: assignment.class_id,
         teacherId: assignment.teacher_id,
+        startDate: assignment.start_date ? new Date(assignment.start_date) : new Date(assignment.created_at),
         dueDate: new Date(assignment.due_date),
         maxScore: assignment.max_score,
         attachments: assignmentAttachments.map(a => a.file_url),
@@ -185,7 +237,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res) => {
 router.put('/:id', authenticateToken, (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { title, description, subjectId, classId, dueDate, maxScore, attachments } = req.body;
+    const { title, description, subjectId, classId, startDate, dueDate, maxScore, attachments } = req.body;
 
     // Check if assignment exists and user is the teacher
     const assignment = db.prepare('SELECT teacher_id FROM assignments WHERE id = ?').get(id) as any;
@@ -204,6 +256,7 @@ router.put('/:id', authenticateToken, (req: AuthRequest, res) => {
     if (description !== undefined) { updates.push('description = ?'); values.push(description); }
     if (subjectId !== undefined) { updates.push('subject_id = ?'); values.push(subjectId); }
     if (classId !== undefined) { updates.push('class_id = ?'); values.push(classId); }
+    if (startDate !== undefined) { updates.push('start_date = ?'); values.push(startDate); }
     if (dueDate !== undefined) { updates.push('due_date = ?'); values.push(dueDate); }
     if (maxScore !== undefined) { updates.push('max_score = ?'); values.push(maxScore); }
     
@@ -231,7 +284,7 @@ router.put('/:id', authenticateToken, (req: AuthRequest, res) => {
 
     const updatedAssignment = db.prepare(`
       SELECT id, title, description, subject_id, class_id, teacher_id,
-             due_date, max_score, created_at, updated_at
+             start_date, due_date, max_score, created_at, updated_at
       FROM assignments
       WHERE id = ?
     `).get(id) as any;
@@ -249,6 +302,7 @@ router.put('/:id', authenticateToken, (req: AuthRequest, res) => {
         subjectId: updatedAssignment.subject_id,
         classId: updatedAssignment.class_id,
         teacherId: updatedAssignment.teacher_id,
+        startDate: updatedAssignment.start_date ? new Date(updatedAssignment.start_date) : new Date(updatedAssignment.created_at),
         dueDate: new Date(updatedAssignment.due_date),
         maxScore: updatedAssignment.max_score,
         attachments: assignmentAttachments.map(a => a.file_url),
@@ -303,19 +357,35 @@ router.post('/:id/submissions', authenticateToken, (req: AuthRequest, res) => {
 
     // Check if already submitted
     const existingSubmission = db.prepare(`
-      SELECT id FROM assignment_submissions WHERE assignment_id = ? AND student_id = ?
-    `).get(assignmentId, req.userId);
+      SELECT id, score FROM assignment_submissions WHERE assignment_id = ? AND student_id = ?
+    `).get(assignmentId, req.userId) as any;
 
-    if (existingSubmission) {
-      return res.status(400).json({ success: false, error: 'Assignment already submitted' });
+    // If already graded, don't allow resubmission
+    if (existingSubmission && existingSubmission.score !== null) {
+      return res.status(400).json({ success: false, error: 'Assignment already graded, cannot resubmit' });
     }
 
-    const submissionId = crypto.randomUUID();
+    let submissionId: string;
 
-    db.prepare(`
-      INSERT INTO assignment_submissions (id, assignment_id, student_id, content, submitted_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-    `).run(submissionId, assignmentId, req.userId, content);
+    if (existingSubmission) {
+      // Update existing submission (revision)
+      submissionId = existingSubmission.id;
+      db.prepare(`
+        UPDATE assignment_submissions 
+        SET content = ?, submitted_at = datetime('now')
+        WHERE id = ?
+      `).run(content, submissionId);
+      
+      // Delete old attachments
+      db.prepare('DELETE FROM submission_attachments WHERE submission_id = ?').run(submissionId);
+    } else {
+      // Create new submission
+      submissionId = crypto.randomUUID();
+      db.prepare(`
+        INSERT INTO assignment_submissions (id, assignment_id, student_id, content, submitted_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+      `).run(submissionId, assignmentId, req.userId, content);
+    }
 
     // Insert attachments
     if (attachments && Array.isArray(attachments)) {
@@ -374,15 +444,18 @@ router.get('/:id/submissions', authenticateToken, (req: AuthRequest, res) => {
     // Students can only see their own submissions
     // Teachers can see all submissions for their assignment
     let query = `
-      SELECT id, assignment_id, student_id, content, score, feedback, submitted_at, graded_at
-      FROM assignment_submissions
-      WHERE assignment_id = ?
+      SELECT s.id, s.assignment_id, s.student_id, s.content, s.score, s.feedback, 
+             s.submitted_at, s.graded_at,
+             u.full_name as student_name, u.student_number
+      FROM assignment_submissions s
+      LEFT JOIN users u ON s.student_id = u.id
+      WHERE s.assignment_id = ?
     `;
     
     const params: any[] = [assignmentId];
     
     if (req.userRole === 'student') {
-      query += ' AND student_id = ?';
+      query += ' AND s.student_id = ?';
       params.push(req.userId);
     } else if (req.userRole === 'teacher') {
       // Teachers can only see submissions for their own assignments
@@ -403,6 +476,8 @@ router.get('/:id/submissions', authenticateToken, (req: AuthRequest, res) => {
         id: submission.id,
         assignmentId: submission.assignment_id,
         studentId: submission.student_id,
+        studentName: submission.student_name,
+        studentNumber: submission.student_number,
         content: submission.content,
         score: submission.score,
         feedback: submission.feedback,
